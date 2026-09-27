@@ -507,7 +507,7 @@ a{color:inherit;text-decoration:none;}
 
 <script>
 /* =====================================================================
-   成长记录档案  —— 多设备同步版
+   成长记录档案  —— 多设备同步版（已修复第二台手机同步不显示档案）
    数据同步方案：GitHub Issues 作为云端数据库
    ===================================================================== */
 
@@ -1142,7 +1142,7 @@ function syncNow(silent){
         if(rIsClosed) rrec._deleted = true;
 
         if(!lrec){
-          if(rIsClosed) return; /* 远端已删除且本地没有，忽略 */
+          if(rIsClosed) return;
           localRows.push(rrec);
           queueIdbPut(store, rrec);
         }else{
@@ -1193,8 +1193,24 @@ function syncNow(silent){
     syncState.syncing = false;
     syncState.lastSyncAt = Date.now();
     saveSyncConfig();
-    if(!silent) toast('同步完成 ✅ 已处理 ' + pushed + ' 条');
-    if(state.route === 'profile' || state.route === 'home') render();
+
+    /* 关键修复：同步后，如果本机还没有宝宝档案，从同步数据里取一条回来 */
+    return dbAll('babies').then(function(babies){
+      var babiesReal = (babies || []).filter(function(b){ return !b._deleted; });
+      if(babiesReal.length){
+        if(!state.baby || rowTime(babiesReal[0]) > rowTime(state.baby)){
+          state.baby = babiesReal[0];
+          state.babyId = babiesReal[0].id;
+        }
+        /* 如果原来停在档案页，自动跳到首页看数据 */
+        if(state.route === 'profile'){
+          state.route = 'home';
+          try{ if(history && history.replaceState) history.replaceState(null, '', '#home'); }catch(e){}
+        }
+      }
+      if(!silent) toast('同步完成 ✅ 已处理 ' + pushed + ' 条');
+      if(state.route === 'profile' || state.route === 'home') render();
+    });
   }).catch(function(e){
     syncState.syncing = false;
     console.error('同步失败：', e);
@@ -2856,8 +2872,7 @@ function editGrowth(id){
 }
 
 /* ===================================================================
-   蒙氏工作 / 运动训练 / 疫苗 / 医疗 / 库存 / 日记
-   （为了控制篇幅，这些模块与之前保持相同逻辑，仅增加同步触发）
+   蒙氏工作
    =================================================================== */
 var MONTESSORI_CATS = ['日常生活','感官','语言','数学','文化科学','艺术'];
 var MONTESSORI_PERF = [
@@ -2945,6 +2960,9 @@ function editMontessori(id){
   });
 }
 
+/* ===================================================================
+   运动训练
+   =================================================================== */
 var MOTOR_TYPES = [
   { v:'tummy', n:'俯卧抬头' },{ v:'roll', n:'翻身' },{ v:'sit', n:'坐立' },
   { v:'crawl', n:'爬行' },{ v:'stand', n:'站立' },{ v:'walk', n:'行走' },
@@ -3028,6 +3046,9 @@ function editMotor(id){
   });
 }
 
+/* ===================================================================
+   疫苗
+   =================================================================== */
 function viewVaccine(){
   return dbByBaby('vaccine', state.babyId).then(function(all){
     var list = all.slice().sort(function(a, b){
@@ -3173,6 +3194,9 @@ function editVaccine(id, prefill){
   });
 }
 
+/* ===================================================================
+   医疗
+   =================================================================== */
 var MEDICAL_TYPES = [
   { v:'checkup', n:'儿保体检', i:'🩺' },
   { v:'visit', n:'就诊记录', i:'🏥' },
@@ -3314,6 +3338,9 @@ function editMedical(id){
   });
 }
 
+/* ===================================================================
+   库存
+   =================================================================== */
 var INV_CATS = [
   { v:'formula', n:'奶粉', i:'🥛' },{ v:'diaper', n:'尿不湿', i:'🧷' },
   { v:'wipe', n:'湿巾', i:'🧻' },{ v:'care', n:'洗护', i:'🧴' },
@@ -3426,6 +3453,9 @@ function editInventory(id){
   });
 }
 
+/* ===================================================================
+   日记
+   =================================================================== */
 function viewDiary(){
   return Promise.all([
     dbByBaby('diary', state.babyId),
