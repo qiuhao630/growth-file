@@ -509,6 +509,13 @@ a{color:inherit;text-decoration:none;}
 .safe-badge.ok{background:#E6F0E0;color:#5B7A4E;}
 .safe-badge.warn{background:#FDEEE0;color:#C08A4A;}
 .safe-badge.bad{background:#FBEAE4;color:#C0654F;}
+
+.baby-switch-item{
+  display:flex;align-items:center;gap:10px;padding:10px;
+  border-radius:10px;margin-bottom:6px;cursor:pointer;
+  transition:all .15s;
+}
+.baby-switch-item:active{ transform:scale(.99); }
 </style>
 </head>
 <body>
@@ -538,8 +545,8 @@ a{color:inherit;text-decoration:none;}
 
 <script>
 /* =====================================================================
-   成长记录档案 —— v7
-   修复：导入后无显示（清理删除标记、自动切换宝宝、显示导入条数）
+   成长记录档案 —— v8
+   修复：导入后自动选中记录最多的宝宝 + 宝宝档案页支持切换
    ===================================================================== */
 
 if(!String.prototype.padStart){
@@ -1316,7 +1323,7 @@ function syncCardHtml(){
 }
 
 /* =====================================================================
-   全局状态 / 路由
+   全局状态
    ===================================================================== */
 var state = {
   baby: null, babyId: null, route: 'home',
@@ -1611,6 +1618,47 @@ function confirmDialog(msg, onOk){
 }
 
 /* ===================================================================
+   切换宝宝
+   =================================================================== */
+function switchBaby(id){
+  return dbGet('babies', id).then(function(baby){
+    if(!baby){ toast('宝宝不存在'); return; }
+    state.baby = baby;
+    state.babyId = baby.id;
+    state.homeDate = todayStr();
+    toast('已切换到「' + baby.name + '」');
+    render();
+  });
+}
+
+function renderBabySwitcher(realBabies){
+  var html = '<div class="card">';
+  html += '<div class="card-title">👶 我的宝宝（共 ' + realBabies.length + ' 个）</div>';
+  html += '<div class="hint" style="margin-bottom:10px">点击可以切换当前正在查看的宝宝</div>';
+  realBabies.forEach(function(baby){
+    var isActive = (baby.id === state.babyId);
+    html += '<div class="baby-switch-item" onclick="switchBaby(\'' + baby.id + '\')" style="background:' 
+      + (isActive ? 'linear-gradient(120deg,#FFF6E3,#F7E6C8)' : 'var(--bg)') 
+      + ';border:1.5px solid ' + (isActive ? 'var(--primary)' : 'var(--border)') + '">';
+    html += '<div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(140deg,#FBE4BE,#EBC89B);display:flex;align-items:center;justify-content:center;font-size:18px;overflow:hidden;flex:0 0 36px">' 
+      + (baby.avatar ? '<img src="' + baby.avatar + '" style="width:100%;height:100%;object-fit:cover">' : '👶') + '</div>';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px">' 
+      + esc(baby.name) 
+      + (isActive ? '<span class="safe-badge ok" style="font-size:10px;padding:1px 7px">当前</span>' : '') 
+      + '</div>';
+    html += '<div style="font-size:11.5px;color:var(--text-l)">' + esc(fmtDate(baby.birthDate)) + ' · ' + (baby.gender === 'male' ? '男宝' : '女宝') + '</div>';
+    html += '</div>';
+    if(!isActive){
+      html += '<span style="font-size:12px;color:var(--primary-d);font-weight:600;white-space:nowrap">切换 ›</span>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+/* ===================================================================
    首页
    =================================================================== */
 function viewHome(){
@@ -1759,10 +1807,13 @@ function changeHomeDateTo(dateStr){
 }
 
 /* ===================================================================
-   宝宝档案
+   宝宝档案（含多宝宝切换）
    =================================================================== */
 function viewProfile(){
   var b = state.baby;
+  var allBabies = (MEM['babies'] || []).filter(function(x){ return !x._deleted; });
+  var switchCard = allBabies.length > 1 ? renderBabySwitcher(allBabies) : '';
+
   var backendText = _backend === 'idb' ? '✅ 浏览器数据库（IndexedDB）'
     : _backend === 'ls' ? '⚠️ 降级模式（本地存储）' : '⏳ 正在初始化';
   var backendBadge = _backend === 'idb' ? 'ok' : 'warn';
@@ -1793,7 +1844,8 @@ function viewProfile(){
 
   if(!b){
     return Promise.resolve(
-      '<div class="page-head"><h1>宝宝档案</h1></div>'
+      switchCard
+      + '<div class="page-head"><h1>宝宝档案</h1></div>'
       + '<div class="card">'
       +   '<p style="margin:0 0 14px;font-size:14px;color:#8B7A66;line-height:1.7">'
       +     '欢迎使用 <b>成长记录档案</b> 👋<br>先创建宝宝档案，即可开始记录。'
@@ -1809,7 +1861,8 @@ function viewProfile(){
   var months = ageMonths(b.birthDate, today);
 
   return Promise.resolve(
-    '<div class="page-head">'
+    switchCard
+    + '<div class="page-head">'
     +   '<h1>宝宝档案<span class="sub">基础信息与数据管理</span></h1>'
     +   '<button class="btn-primary" onclick="editBaby()">✎ 编辑</button>'
     + '</div>'
@@ -2272,7 +2325,9 @@ function feedSummary(f){
         }
         parts.push(ps);
       }
-      return parts.length ? parts.join(' + ') : '已记录';
+      if(parts.length) return parts.join(' + ');
+      if(f.notes) return '已记录';
+      return '已记录';
     case 'stool':
       var s = null;
       for(var k = 0; k < STOOL_SHAPES.length; k++){
@@ -3919,7 +3974,7 @@ function bindChipsInModal(mask){
 }
 
 /* ===================================================================
-   导出 / 导入（导入修复版）
+   导出 / 导入（v8：自动选记录最多的宝宝）
    =================================================================== */
 function exportData(){
   var data = {};
@@ -3967,7 +4022,19 @@ function importData(){
         return;
       }
 
-      if(!confirm('即将导入 ' + total + ' 条记录（' + summary.join(', ') + '）。\n相同 ID 会覆盖。确定继续吗？')) return;
+      if(!confirm('即将导入 ' + total + ' 条记录（' + summary.join(', ') + '）。\n\n相同 ID 的记录会覆盖本机旧数据。\n确定继续吗？')) return;
+
+      /* 统计备份里每个宝宝的记录数 */
+      var perBabyCount = {};
+      MIRROR_STORES.forEach(function(s){
+        if(s === 'babies') return;
+        if(!data[s] || !data[s].length) return;
+        data[s].forEach(function(rec){
+          if(rec && rec.babyId){
+            perBabyCount[rec.babyId] = (perBabyCount[rec.babyId] || 0) + 1;
+          }
+        });
+      });
 
       var chain = Promise.resolve();
       STORES.forEach(function(s){
@@ -3997,19 +4064,39 @@ function importData(){
           return;
         }
 
-        var picked = realBabies[0];
-        state.baby = picked;
-        state.babyId = picked.id;
+        /* 选记录最多的宝宝；记录数相同则选 _updatedAt 最新的 */
+        var best = null;
+        var bestCount = -1;
+        var bestTime = 0;
+        realBabies.forEach(function(b){
+          var cnt = perBabyCount[b.id] || 0;
+          var t = rowTime(b);
+          if(cnt > bestCount || (cnt === bestCount && t > bestTime)){
+            bestCount = cnt;
+            bestTime = t;
+            best = b;
+          }
+        });
+        if(!best) best = realBabies[0];
+
+        state.baby = best;
+        state.babyId = best.id;
         state.homeDate = todayStr();
         state.route = 'home';
         try{ if(history && history.replaceState) history.replaceState(null, '', '#home'); }catch(e){}
 
         render();
 
-        var msg = '导入成功 ✅\n\n宝宝：' + picked.name
-          + '\n共导入 ' + total + ' 条记录';
+        var msg = '导入成功 ✅\n\n共导入 ' + total + ' 条记录\n';
         if(realBabies.length > 1){
-          msg += '\n\n⚠️ 检测到 ' + realBabies.length + ' 个宝宝，已切换到「' + picked.name + '」。';
+          msg += '检测到 ' + realBabies.length + ' 个宝宝档案：\n\n';
+          realBabies.forEach(function(b){
+            var cnt = perBabyCount[b.id] || 0;
+            msg += '· ' + b.name + '（' + cnt + ' 条记录）' + (b.id === best.id ? '  ← 已选中' : '') + '\n';
+          });
+          msg += '\n已自动选中最新的「' + best.name + '」。\n如需查看其它宝宝，请到「宝宝档案」页面切换。';
+        }else{
+          msg += '宝宝：' + best.name;
         }
         alert(msg);
 
