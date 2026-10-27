@@ -419,7 +419,7 @@ a{color:inherit;text-decoration:none;}
 }
 #toast.show{opacity:1;transform:translate(-50%,0);}
 
-.feed-stat-bar{display:flex;gap:6px;overflow-x:auto;padding:4px 0;-webkit-overflow-scrolling:touch;}
+.feed-stat-bar{display:flex;gap:6px;overflow-x:auto;padding:4px 0;-webkit-overflow-scrolling:touch;touch-action:pan-x;}
 .feed-stat-bar::-webkit-scrollbar{display:none;}
 .chart-type-btn{
   flex:0 0 auto;padding:7px 14px;border-radius:20px;background:#FFF6E6;
@@ -428,7 +428,40 @@ a{color:inherit;text-decoration:none;}
 }
 .chart-type-btn.sel{background:linear-gradient(135deg,#D9AE7B,#C08F5C);color:#fff;border-color:transparent;}
 .feed-stat-card{background:var(--card);border-radius:var(--r);padding:14px;box-shadow:var(--shadow);margin-bottom:12px;border:1px solid rgba(234,223,200,.7);}
-.feed-stat-card canvas{width:100%;height:220px;display:block;}
+
+/* 横向滚动图（修复版） */
+.feed-chart-scroll{
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  margin-top: 10px;
+  padding-bottom: 10px;
+  width: 100%;
+  position: relative;
+}
+.feed-chart-scroll::-webkit-scrollbar{ height: 4px; }
+.feed-chart-scroll::-webkit-scrollbar-thumb{ background: #D4C4A8; border-radius: 2px; }
+.feed-chart-inner{
+  display: inline-block;
+  vertical-align: top;
+}
+.feed-chart-inner canvas{
+  display: block;
+  height: 260px;
+}
+
+/* 折叠头部 */
+.day-head{
+  display:flex;align-items:center;gap:8px;margin:0 2px 8px;
+  flex-wrap:wrap;cursor:pointer;user-select:none;
+  padding: 6px 4px; border-radius: 8px;
+}
+.day-head:active{ background: rgba(200,155,106,.08); }
+.day-fold-icon{
+  font-size: 10px;color: var(--text-l);
+  width: 14px;display: inline-block;text-align: center;
+}
 
 .food-card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:10px;box-shadow:var(--shadow);border:1px solid rgba(234,223,200,.6);}
 .food-card-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
@@ -507,8 +540,8 @@ a{color:inherit;text-decoration:none;}
 
 <script>
 /* =====================================================================
-   成长记录档案  —— 多设备同步版（已修复第二台手机同步不显示档案）
-   数据同步方案：GitHub Issues 作为云端数据库
+   成长记录档案 —— v6
+   修复：颜色区分、补剂/点心/辅食统计、横向滚动
    ===================================================================== */
 
 if(!String.prototype.padStart){
@@ -603,7 +636,7 @@ function toggleTheme(){
 }
 
 /* =====================================================================
-   存储层：内存 + localStorage 镜像 + IndexedDB
+   存储层
    ===================================================================== */
 var DB_NAME = 'bb_workbench';
 var DB_VER = 1;
@@ -1133,7 +1166,6 @@ function syncNow(silent){
 
       var remote = remoteByStore[store] || {};
 
-      /* 拉取：远端 → 本地 */
       Object.keys(remote).forEach(function(id){
         var info = remote[id];
         var rrec = JSON.parse(JSON.stringify(info.record));
@@ -1158,7 +1190,6 @@ function syncNow(silent){
       MEM[store] = localRows;
       writeMirror(store, localRows);
 
-      /* 推送：本地 → 远端 */
       localRows.forEach(function(r){
         var info = remote[r.id];
         if(!info){
@@ -1194,7 +1225,6 @@ function syncNow(silent){
     syncState.lastSyncAt = Date.now();
     saveSyncConfig();
 
-    /* 关键修复：同步后，如果本机还没有宝宝档案，从同步数据里取一条回来 */
     return dbAll('babies').then(function(babies){
       var babiesReal = (babies || []).filter(function(b){ return !b._deleted; });
       if(babiesReal.length){
@@ -1202,7 +1232,6 @@ function syncNow(silent){
           state.baby = babiesReal[0];
           state.babyId = babiesReal[0].id;
         }
-        /* 如果原来停在档案页，自动跳到首页看数据 */
         if(state.route === 'profile'){
           state.route = 'home';
           try{ if(history && history.replaceState) history.replaceState(null, '', '#home'); }catch(e){}
@@ -1298,7 +1327,8 @@ var state = {
   homeDate: todayStr(),
   feedChartType: 'milk',
   persisted: false,
-  persistSupported: true
+  persistSupported: true,
+  feedingCollapsed: {}
 };
 
 var ROUTES = [
@@ -1318,7 +1348,7 @@ var ROUTES = [
 var MODULE_TITLES = {};
 ROUTES.forEach(function(r){ MODULE_TITLES[r.id] = r.name; });
 
-/* 疫苗计划数据 */
+/* 疫苗计划 */
 var VACCINE_SCHEDULE = [
   { name:'乙肝疫苗', month:0, dose:1, label:'第1剂' },
   { name:'卡介苗', month:0, dose:1, label:'第1剂' },
@@ -1609,7 +1639,7 @@ function viewHome(){
       .reduce(function(s, f){ return s + (+f.amountMl || 0); }, 0);
     var waterMl = dayFeed.filter(function(f){ return f.type === 'water'; })
       .reduce(function(s, f){ return s + (+f.amountMl || 0); }, 0);
-    var diaperCount = dayFeed.filter(function(f){ return f.type === 'diaper'; })
+    var diaperCount = dayFeed.filter(function(f){ return f.type === 'diaper' || f.type === 'stool'; })
       .reduce(function(s, f){ return s + (+f.count || 1); }, 0);
     var solids = dayFeed.filter(function(f){ return f.type === 'solid'; })
       .map(function(f){ return f.foodName; }).filter(Boolean);
@@ -1648,7 +1678,6 @@ function viewHome(){
       + '</div>'
       + '</div>';
 
-    /* 同步状态提示 */
     if(syncState.enabled){
       var lastTxt = syncState.lastSyncAt ? tsToTime(syncState.lastSyncAt) : '未同步';
       html += '<div class="reminder safe" style="cursor:pointer" onclick="syncNow()">'
@@ -1658,7 +1687,6 @@ function viewHome(){
         + '<span class="r-ico">☁️</span><span>未开启多设备同步。点击前往「宝宝档案」设置，两台手机共享数据</span></div>';
     }
 
-    /* 数据安全提醒 */
     var lastBackup = getLastBackup();
     var daysSince = lastBackup ? Math.floor((Date.now() - lastBackup) / 86400000) : -1;
     if(!lastBackup || daysSince >= 7){
@@ -1959,7 +1987,7 @@ function viewFoodLib(){
 }
 
 /* ===================================================================
-   云相册（本地，不参与同步）
+   云相册
    =================================================================== */
 var MAX_FILES = 12;
 var MAX_IMAGE_SIZE = 80 * 1024 * 1024;
@@ -2173,7 +2201,7 @@ function openMediaViewer(id){
 }
 
 /* ===================================================================
-   喂养记录
+   喂养记录 —— 常量
    =================================================================== */
 var FEED_TYPES = [
   { v:'milk',       n:'奶量',     i:'🍼' },
@@ -2184,24 +2212,37 @@ var FEED_TYPES = [
   { v:'supplement', n:'营养补剂', i:'💊' },
   { v:'sleep',      n:'睡眠',     i:'😴' },
   { v:'diaper',     n:'尿不湿',   i:'🧷' },
-  { v:'stool',      n:'大便形态', i:'💩' },
   { v:'bath',       n:'洗澡',     i:'🛁' }
 ];
+var FEED_TYPE_MAP = {};
+FEED_TYPES.forEach(function(t){ FEED_TYPE_MAP[t.v] = t; });
+FEED_TYPE_MAP['stool'] = { v:'stool', n:'大便', i:'💩' };
+
 var STOOL_SHAPES = [
   { v:'normal', n:'正常成形' },{ v:'soft', n:'偏软' },{ v:'loose', n:'稀糊' },
   { v:'watery', n:'水样' },{ v:'hard', n:'干硬' },{ v:'mucous', n:'黏液' },{ v:'color', n:'颜色异常' }
 ];
-var FEED_TYPE_MAP = {};
-FEED_TYPES.forEach(function(t){ FEED_TYPE_MAP[t.v] = t; });
 
+var PEE_COLORS = [
+  { v:'light',  n:'淡黄' },
+  { v:'yellow', n:'黄色' },
+  { v:'dark',   n:'深黄' },
+  { v:'pink',   n:'粉红' },
+  { v:'red',    n:'偏红' }
+];
+
+/* 已添加：辅食、点心、补剂 */
 var CHART_TYPES = [
-  { v:'milk',   n:'🍼 奶量',   unit:'ml',   mode:'sum' },
-  { v:'breast', n:'🤱 母乳',   unit:'分钟', mode:'sum' },
-  { v:'sleep',  n:'😴 睡眠',   unit:'分钟', mode:'sum' },
-  { v:'water',  n:'💧 饮水',   unit:'ml',   mode:'sum' },
-  { v:'diaper', n:'🧷 尿不湿', unit:'次',   mode:'sum' },
-  { v:'stool',  n:'💩 大便',   unit:'次',   mode:'count' },
-  { v:'bath',   n:'🛁 洗澡',   unit:'次',   mode:'count' }
+  { v:'milk',       n:'🍼 奶量',   unit:'ml',   mode:'sum' },
+  { v:'breast',     n:'🤱 母乳',   unit:'分钟', mode:'sum' },
+  { v:'sleep',      n:'😴 睡眠',   unit:'分钟', mode:'sum' },
+  { v:'water',      n:'💧 饮水',   unit:'ml',   mode:'sum' },
+  { v:'solid',      n:'🥣 辅食',   unit:'次',   mode:'count' },
+  { v:'snack',      n:'🍎 点心',   unit:'次',   mode:'count' },
+  { v:'supplement', n:'💊 补剂',   unit:'次',   mode:'count' },
+  { v:'diaper',     n:'🧷 尿不湿', unit:'次',   mode:'sum' },
+  { v:'poop',       n:'💩 便便',   unit:'次',   mode:'count' },
+  { v:'bath',       n:'🛁 洗澡',   unit:'次',   mode:'count' }
 ];
 
 function feedSummary(f){
@@ -2212,19 +2253,52 @@ function feedSummary(f){
     case 'solid':      return f.foodName || '已记录';
     case 'snack':      return f.foodName || '已记录';
     case 'supplement': return f.supplementName || '已服用';
-    case 'sleep':      return (f.minutes || 0) + ' 分钟';
-    case 'diaper':     return (f.count || 1) + ' 次';
+    case 'sleep':
+      var mins = f.minutes || 0;
+      if(f.sleepStart && f.sleepEnd){
+        return f.sleepStart + ' → ' + f.sleepEnd + '（' + mins + ' 分钟）';
+      }
+      return mins + ' 分钟';
+    case 'diaper':
+      var parts = [];
+      if(f.hasPee){
+        var pc = '尿';
+        for(var i = 0; i < PEE_COLORS.length; i++){
+          if(PEE_COLORS[i].v === f.peeColor){ pc = '尿·' + PEE_COLORS[i].n; break; }
+        }
+        parts.push(pc);
+      }
+      if(f.hasPoop){
+        var ps = '便便';
+        for(var j = 0; j < STOOL_SHAPES.length; j++){
+          if(STOOL_SHAPES[j].v === f.stoolShape){ ps = '便便·' + STOOL_SHAPES[j].n; break; }
+        }
+        parts.push(ps);
+      }
+      return parts.length ? parts.join(' + ') : '已记录';
     case 'stool':
       var s = null;
-      for(var i = 0; i < STOOL_SHAPES.length; i++){
-        if(STOOL_SHAPES[i].v === f.stoolShape){ s = STOOL_SHAPES[i]; break; }
+      for(var k = 0; k < STOOL_SHAPES.length; k++){
+        if(STOOL_SHAPES[k].v === f.stoolShape){ s = STOOL_SHAPES[k]; break; }
       }
-      return s ? s.n : '已记录';
+      return '便便·' + (s ? s.n : '已记录');
     case 'bath':       return '已洗澡';
     default:           return '已记录';
   }
 }
 
+function toggleFeedDay(d){
+  if(!state.feedingCollapsed) state.feedingCollapsed = {};
+  state.feedingCollapsed[d] = !state.feedingCollapsed[d];
+  var body = document.getElementById('day-body-' + d);
+  var icon = document.getElementById('day-icon-' + d);
+  if(body) body.style.display = state.feedingCollapsed[d] ? 'none' : 'block';
+  if(icon) icon.textContent = state.feedingCollapsed[d] ? '▶' : '▼';
+}
+
+/* ===================================================================
+   喂养记录 —— 视图
+   =================================================================== */
 function viewFeeding(){
   return dbByBaby('feeding', state.babyId).then(function(list){
     list.sort(function(a, b){ return b.recordedAt - a.recordedAt; });
@@ -2235,6 +2309,8 @@ function viewFeeding(){
       groups[d].push(f);
     });
     order.sort(function(a, b){ return b.localeCompare(a); });
+
+    var collapsed = state.feedingCollapsed || {};
 
     var chips = FEED_TYPES.map(function(t){
       return '<button type="button" class="chip' + (state.feedingType === t.v ? ' sel' : '') + '" data-ft="' + t.v + '">' + t.i + ' ' + t.n + '</button>';
@@ -2248,13 +2324,16 @@ function viewFeeding(){
       var items = groups[d];
       var milk = items.filter(function(f){ return f.type === 'milk'; }).reduce(function(s, f){ return s + (+f.amountMl || 0); }, 0);
       var breast = items.filter(function(f){ return f.type === 'breast'; }).reduce(function(s, f){ return s + (+f.minutes || 0); }, 0);
-      var diaper = items.filter(function(f){ return f.type === 'diaper'; }).reduce(function(s, f){ return s + (+f.count || 1); }, 0);
+      var diaper = items.filter(function(f){ return f.type === 'diaper' || f.type === 'stool'; }).reduce(function(s, f){ return s + (+f.count || 1); }, 0);
+      var isCollapsed = !!collapsed[d];
       return '<div style="margin-bottom:16px">'
-        + '<div style="display:flex;align-items:center;gap:8px;margin:0 2px 8px;flex-wrap:wrap">'
+        + '<div class="day-head" onclick="toggleFeedDay(\'' + d + '\')">'
+        +   '<span class="day-fold-icon" id="day-icon-' + d + '">' + (isCollapsed ? '▶' : '▼') + '</span>'
         +   '<span style="font-size:13.5px;font-weight:700;color:var(--text)">' + esc(fmtDate(d)) + '</span>'
         +   (d === todayStr() ? '<span class="tag pending">今天</span>' : '')
         +   '<span style="font-size:11.5px;color:var(--text-l);margin-left:auto">奶' + milk + 'ml · 母乳' + breast + '分 · 尿布' + diaper + '次</span>'
         + '</div>'
+        + '<div id="day-body-' + d + '" style="display:' + (isCollapsed ? 'none' : 'block') + '">'
         + items.map(function(f){
           var t = FEED_TYPE_MAP[f.type] || { n: f.type, i: '📝' };
           return '<div class="item">'
@@ -2269,6 +2348,7 @@ function viewFeeding(){
             + '</div>'
             + '</div>';
         }).join('')
+        + '</div>'
         + '</div>';
     }).join('');
 
@@ -2309,10 +2389,14 @@ function viewFeeding(){
       + '<div class="feed-stat-card">'
       +   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
       +     '<div style="font-size:14px;font-weight:700;color:var(--text)">📊 喂养统计</div>'
-      +     '<div style="font-size:11.5px;color:var(--text-l)">近7天</div>'
+      +     '<div style="font-size:11.5px;color:var(--text-l)">← 左右滑动 →</div>'
       +   '</div>'
       +   '<div class="feed-stat-bar" id="feedStatBar">' + chartBtns + '</div>'
-      +   '<canvas id="feedChartCanvas" style="margin-top:10px"></canvas>'
+      +   '<div class="feed-chart-scroll" id="feedChartScroll">'
+      +     '<div class="feed-chart-inner" id="feedChartInner">'
+      +       '<canvas id="feedChartCanvas"></canvas>'
+      +     '</div>'
+      +   '</div>'
       +   '<div id="feedChartSummary" style="margin-top:8px"></div>'
       + '</div>'
       + (list.length === 0
@@ -2321,9 +2405,14 @@ function viewFeeding(){
   });
 }
 
+/* ===================================================================
+   喂养记录 —— 图表（横向滚动 + 分段堆叠 + 顶部总数）
+   =================================================================== */
 function drawFeedChart(){
+  var scrollWrap = $('#feedChartScroll');
   var canvas = $('#feedChartCanvas');
-  if(!canvas) return;
+  var inner = $('#feedChartInner');
+  if(!scrollWrap || !canvas) return;
   var type = state.feedChartType;
   var ct = null;
   for(var i = 0; i < CHART_TYPES.length; i++){
@@ -2332,133 +2421,268 @@ function drawFeedChart(){
   if(!ct) ct = CHART_TYPES[0];
 
   dbByBaby('feeding', state.babyId).then(function(list){
-    var days = [];
-    var now = new Date();
-    for(var i = 6; i >= 0; i--){
-      var d = new Date(now);
-      d.setDate(d.getDate() - i);
-      days.push(d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()));
-    }
-    var dayData = days.map(function(day){
-      var dayItems = list.filter(function(f){ return tsToDate(f.recordedAt) === day; });
-      var val = 0;
-      if(ct.mode === 'count'){
-        val = dayItems.filter(function(f){ return f.type === type; }).length;
-      }else{
-        if(type === 'milk') val = dayItems.filter(function(f){ return f.type === 'milk'; }).reduce(function(s, f){ return s + (+f.amountMl || 0); }, 0);
-        else if(type === 'breast') val = dayItems.filter(function(f){ return f.type === 'breast'; }).reduce(function(s, f){ return s + (+f.minutes || 0); }, 0);
-        else if(type === 'sleep') val = dayItems.filter(function(f){ return f.type === 'sleep'; }).reduce(function(s, f){ return s + (+f.minutes || 0); }, 0);
-        else if(type === 'water') val = dayItems.filter(function(f){ return f.type === 'water'; }).reduce(function(s, f){ return s + (+f.amountMl || 0); }, 0);
-        else if(type === 'diaper') val = dayItems.filter(function(f){ return f.type === 'diaper'; }).reduce(function(s, f){ return s + (+f.count || 1); }, 0);
-      }
-      return { day: day, val: val };
+    var dateMap = {};
+    list.forEach(function(f){
+      var d = tsToDate(f.recordedAt);
+      if(!dateMap[d]) dateMap[d] = [];
+      dateMap[d].push(f);
     });
+    var allDates = Object.keys(dateMap).sort();
 
     var dpr = window.devicePixelRatio || 1;
-    var W = canvas.clientWidth || 320;
-    var H = canvas.clientHeight || 220;
+    var isNight = document.body.classList.contains('night');
+
+    if(allDates.length === 0){
+      var W0 = scrollWrap.clientWidth || 320;
+      var H0 = 220;
+      if(inner) inner.style.width = W0 + 'px';
+      canvas.width = W0 * dpr;
+      canvas.height = H0 * dpr;
+      canvas.style.width = W0 + 'px';
+      canvas.style.height = H0 + 'px';
+      var ctx0 = canvas.getContext('2d');
+      ctx0.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx0.clearRect(0, 0, W0, H0);
+      ctx0.fillStyle = isNight ? '#8B7A66' : '#C4B49B';
+      ctx0.font = '13px -apple-system, sans-serif';
+      ctx0.textAlign = 'center'; ctx0.textBaseline = 'middle';
+      ctx0.fillText('添加喂养记录后显示统计', W0 / 2, H0 / 2);
+      var summaryEl0 = $('#feedChartSummary');
+      if(summaryEl0) summaryEl0.innerHTML = '';
+      return;
+    }
+
+    function segmentValues(dayItems){
+      var vals = [];
+      if(type === 'poop'){
+        dayItems.forEach(function(f){
+          if(f.type === 'diaper' && f.hasPoop) vals.push(1);
+          else if(f.type === 'stool') vals.push(1);
+        });
+      }else if(type === 'diaper'){
+        dayItems.forEach(function(f){
+          if(f.type === 'diaper') vals.push(f.count || 1);
+          else if(f.type === 'stool') vals.push(1);
+        });
+      }else if(type === 'milk'){
+        dayItems.forEach(function(f){
+          if(f.type === 'milk' && +f.amountMl > 0) vals.push(+f.amountMl);
+        });
+      }else if(type === 'breast'){
+        dayItems.forEach(function(f){
+          if(f.type === 'breast' && +f.minutes > 0) vals.push(+f.minutes);
+        });
+      }else if(type === 'sleep'){
+        dayItems.forEach(function(f){
+          if(f.type === 'sleep' && +f.minutes > 0) vals.push(+f.minutes);
+        });
+      }else if(type === 'water'){
+        dayItems.forEach(function(f){
+          if(f.type === 'water' && +f.amountMl > 0) vals.push(+f.amountMl);
+        });
+      }else if(type === 'bath'){
+        dayItems.forEach(function(f){
+          if(f.type === 'bath') vals.push(1);
+        });
+      }else if(type === 'solid'){
+        dayItems.forEach(function(f){
+          if(f.type === 'solid') vals.push(1);
+        });
+      }else if(type === 'snack'){
+        dayItems.forEach(function(f){
+          if(f.type === 'snack') vals.push(1);
+        });
+      }else if(type === 'supplement'){
+        dayItems.forEach(function(f){
+          if(f.type === 'supplement') vals.push(1);
+        });
+      }
+      return vals;
+    }
+
+    var dayData = allDates.map(function(day){
+      var vals = segmentValues(dateMap[day]);
+      var total = vals.reduce(function(s, v){ return s + v; }, 0);
+      return { day: day, values: vals, total: total };
+    });
+
+    var n = dayData.length;
+    var daySlot = 54;
+    var padL = 40, padR = 20, padT = 32, padB = 44;
+    var minW = scrollWrap.clientWidth || 320;
+    var W = Math.max(minW, n * daySlot + padL + padR);
+    var H = 260;
+
+    if(inner) inner.style.width = W + 'px';
     canvas.width = W * dpr;
     canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+
     var ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
-    var padL = 38, padR = 10, padT = 14, padB = 30;
     var cw = W - padL - padR;
     var ch = H - padT - padB;
-
     var maxVal = 1;
-    dayData.forEach(function(d){ if(d.val > maxVal) maxVal = d.val; });
-    maxVal = Math.ceil(maxVal * 1.15);
+    dayData.forEach(function(d){ if(d.total > maxVal) maxVal = d.total; });
+    maxVal = Math.ceil(maxVal * 1.18);
     if(maxVal < 1) maxVal = 1;
 
-    function X(i){ return padL + (i + 0.5) / 7 * cw; }
+    function X(i){ return padL + (i + 0.5) * (cw / n); }
     function Y(v){ return padT + ch - (v / maxVal) * ch; }
 
-    var isNight = document.body.classList.contains('night');
+    /* 网格 */
     ctx.strokeStyle = isNight ? '#3D362C' : '#F0E4CE';
     ctx.lineWidth = 1;
     ctx.fillStyle = isNight ? '#8B7A66' : '#A89179';
     ctx.font = '10px -apple-system, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    for(var i = 0; i <= 4; i++){
-      var v = maxVal * i / 4;
-      var y = Y(v);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + cw, y); ctx.stroke();
-      ctx.fillText(Math.round(v), padL - 6, y);
+    for(var gi = 0; gi <= 4; gi++){
+      var gv = maxVal * gi / 4;
+      var gy = Y(gv);
+      ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(padL + cw, gy); ctx.stroke();
+      ctx.fillText(Math.round(gv), padL - 6, gy);
     }
 
-    var barW = cw / 7 * 0.52;
+    /* 分段颜色（暖色调色板，区分度高） */
+    var PALETTE_DAY = [
+      '#F7D9B4', '#EFB980', '#E39A55', '#CE7F35', '#B66A1F', '#95500F',
+      '#F2C790', '#DFA65E', '#CB8B35', '#B07024'
+    ];
+    var PALETTE_NIGHT = [
+      '#E0A868', '#CC8E48', '#B87628', '#A45E18', '#904808', '#7C3800',
+      '#F0B878', '#DC9C50', '#C88230', '#B46818'
+    ];
+    var palette = isNight ? PALETTE_NIGHT : PALETTE_DAY;
+
+    var slotW = cw / n;
+    var barW = Math.min(slotW * 0.62, 34);
+    if(barW < 6) barW = 6;
+
     dayData.forEach(function(d, i){
-      var x = X(i) - barW / 2;
-      var y = Y(d.val);
-      var h = Y(0) - Y(d.val);
-      if(h < 1) h = 1;
-      var grad = ctx.createLinearGradient(0, y, 0, y + h);
-      if(isNight){ grad.addColorStop(0, '#D4A876'); grad.addColorStop(1, '#8B6F47'); }
-      else{ grad.addColorStop(0, '#E9C79B'); grad.addColorStop(1, '#C89B6A'); }
-      ctx.fillStyle = grad;
-      var r = Math.min(4, barW / 2);
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + barW - r, y);
-      ctx.quadraticCurveTo(x + barW, y, x + barW, y + r);
-      ctx.lineTo(x + barW, y + h);
-      ctx.lineTo(x, y + h);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = isNight ? '#E8DCC8' : '#5A4A3A';
-      ctx.font = 'bold 10px -apple-system, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'bottom';
-      if(d.val > 0) ctx.fillText(d.val, X(i), y - 3);
+      var cx = X(i);
+      var x = cx - barW / 2;
+      var segCount = d.values.length;
+      var acc = 0;
+      for(var k = 0; k < segCount; k++){
+        var v = d.values[k];
+        var yTop = Y(acc + v);
+        var h = Y(acc) - Y(acc + v);
+        if(h < 1) h = 1;
+        ctx.fillStyle = palette[k % palette.length];
+        var isTop = (k === segCount - 1);
+        if(isTop){
+          var r = Math.min(3, barW / 2, h / 2);
+          ctx.beginPath();
+          ctx.moveTo(x + r, yTop);
+          ctx.lineTo(x + barW - r, yTop);
+          ctx.quadraticCurveTo(x + barW, yTop, x + barW, yTop + r);
+          ctx.lineTo(x + barW, yTop + h);
+          ctx.lineTo(x, yTop + h);
+          ctx.lineTo(x, yTop + r);
+          ctx.quadraticCurveTo(x, yTop, x + r, yTop);
+          ctx.closePath();
+          ctx.fill();
+        }else{
+          ctx.fillRect(x, yTop, barW, h);
+        }
+        /* 段间分隔线 */
+        if(k < segCount - 1){
+          ctx.strokeStyle = isNight ? 'rgba(30,27,23,.7)' : 'rgba(255,252,245,.95)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(x, yTop + h);
+          ctx.lineTo(x + barW, yTop + h);
+          ctx.stroke();
+        }
+        acc += v;
+      }
+
+      if(d.total > 0){
+        var totalY = Y(d.total);
+        ctx.fillStyle = isNight ? '#E8DCC8' : '#5A4A3A';
+        ctx.font = 'bold 10px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(d.total, cx, totalY - 4);
+      }
+
       ctx.fillStyle = isNight ? '#8B7A66' : '#A89179';
       ctx.font = '9px -apple-system, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       var parts = d.day.split('-');
-      ctx.fillText(parseInt(parts[1], 10) + '/' + parseInt(parts[2], 10), X(i), padT + ch + 6);
+      ctx.fillText(parseInt(parts[1], 10) + '/' + parseInt(parts[2], 10), cx, padT + ch + 8);
+      if(i === 0){
+        ctx.font = '8px -apple-system, sans-serif';
+        ctx.fillText(parts[0].slice(2), cx, padT + ch + 22);
+      }
     });
 
-    var total = dayData.reduce(function(s, d){ return s + d.val; }, 0);
-    var avg = Math.round(total / 7 * 10) / 10;
-    var todayVal = dayData[6].val;
+    var grandTotal = dayData.reduce(function(s, d){ return s + d.total; }, 0);
+    var avg = n > 0 ? Math.round(grandTotal / n * 10) / 10 : 0;
+    var lastDay = dayData[n - 1];
     var summaryEl = $('#feedChartSummary');
     if(summaryEl){
       summaryEl.innerHTML = '<div class="summary-bar">'
-        + '<div class="summary-chip"><div class="sc-val">' + todayVal + '</div><div class="sc-label">今日' + ct.unit + '</div></div>'
+        + '<div class="summary-chip"><div class="sc-val">' + (lastDay ? lastDay.total : 0) + '</div><div class="sc-label">最近' + ct.unit + '</div></div>'
         + '<div class="summary-chip"><div class="sc-val">' + avg + '</div><div class="sc-label">日均' + ct.unit + '</div></div>'
-        + '<div class="summary-chip"><div class="sc-val">' + total + '</div><div class="sc-label">7天合计' + ct.unit + '</div></div>'
+        + '<div class="summary-chip"><div class="sc-val">' + grandTotal + '</div><div class="sc-label">累计' + ct.unit + '（' + n + '天）</div></div>'
         + '</div>';
     }
+
+    setTimeout(function(){
+      if(scrollWrap) scrollWrap.scrollLeft = scrollWrap.scrollWidth;
+    }, 30);
   });
 }
 
+/* ===================================================================
+   喂养记录 —— 表单
+   =================================================================== */
 function feedFormBody(f){
   var type = f ? f.type : state.feedingType;
+  if(type === 'stool') type = 'diaper';
+
   var chips = FEED_TYPES.map(function(x){
     return '<button type="button" class="chip' + (x.v === type ? ' sel' : '') + '" data-v="' + x.v + '">' + x.i + ' ' + x.n + '</button>';
   }).join('');
+
   var showAmt = ['milk','water'].indexOf(type) >= 0;
   var showBreast = type === 'breast';
   var showFood = ['solid','snack'].indexOf(type) >= 0;
   var showSup = type === 'supplement';
   var showSleep = type === 'sleep';
-  var showCnt = type === 'diaper';
-  var showStool = type === 'stool';
+  var showDiaper = type === 'diaper';
+
   var breastMinutes = (f && f.type === 'breast' && f.minutes != null) ? f.minutes : 0;
   var sleepMinutes = (f && f.type === 'sleep' && f.minutes != null) ? f.minutes : '';
+
+  var hasPee = false, hasPoop = false;
+  var curPeeColor = 'yellow';
+  var curStoolShape = 'normal';
+  if(f && f.type === 'diaper'){
+    hasPee = !!f.hasPee;
+    hasPoop = !!f.hasPoop;
+    curPeeColor = f.peeColor || 'yellow';
+    curStoolShape = f.stoolShape || 'normal';
+  } else if(f && f.type === 'stool'){
+    hasPoop = true;
+    curStoolShape = f.stoolShape || 'normal';
+  }
 
   return ''
     + '<div class="field"><label>记录类型 *</label>'
     +   '<div class="chips" id="ftChips">' + chips + '</div>'
     +   '<input type="hidden" name="type" value="' + type + '"></div>'
+
     + '<div class="field" id="fAmt" style="display:' + (showAmt ? 'block' : 'none') + '">'
     +   '<label>量（ml）</label>'
     +   '<input type="number" name="amountMl" min="0" step="1" value="' + esc(f && f.amountMl != null ? f.amountMl : '') + '" placeholder="例如 150"></div>'
+
     + '<div class="field" id="fBreast" style="display:' + (showBreast ? 'block' : 'none') + '">'
     +   '<label>母乳喂养时长（分钟）</label>'
     +   '<div style="display:flex;gap:8px;align-items:center">'
@@ -2466,12 +2690,15 @@ function feedFormBody(f){
     +     '<button type="button" class="btn-primary btn-sm" id="breastTimerBtn" onclick="toggleBreastTimer()">▶ 开始</button>'
     +   '</div>'
     +   '<div class="hint" id="breastTimerHint">点击「开始」计时，再次点击停止并自动填入时长</div></div>'
+
     + '<div class="field" id="fFood" style="display:' + (showFood ? 'block' : 'none') + '">'
     +   '<label>食物名称</label>'
     +   '<input type="text" name="foodName" value="' + esc(f ? f.foodName || '' : '') + '" placeholder="例如 米糊 / 苹果泥"></div>'
+
     + '<div class="field" id="fSup" style="display:' + (showSup ? 'block' : 'none') + '">'
     +   '<label>补剂名称</label>'
     +   '<input type="text" name="supplementName" value="' + esc(f ? f.supplementName || '' : '') + '" placeholder="例如 维生素D3"></div>'
+
     + '<div class="field" id="fSleep" style="display:' + (showSleep ? 'block' : 'none') + '">'
     +   '<label>睡眠时段</label>'
     +   '<div class="field-row">'
@@ -2485,19 +2712,40 @@ function feedFormBody(f){
     +   '</div>'
     +   '<input type="hidden" name="sleepMinutes" id="sleepMinutesInput" value="' + esc(sleepMinutes) + '">'
     +   '<div class="hint">支持跨天计算（如 22:00 至次日 06:00）</div></div>'
-    + '<div class="field" id="fCnt" style="display:' + (showCnt ? 'block' : 'none') + '">'
-    +   '<label>尿不湿次数</label>'
-    +   '<input type="number" name="count" min="1" step="1" value="' + esc(f && f.count != null ? f.count : 1) + '"></div>'
-    + '<div class="field" id="fStool" style="display:' + (showStool ? 'block' : 'none') + '">'
-    +   '<label>大便形态</label>'
+
+    + '<div class="field" id="fDiaper" style="display:' + (showDiaper ? 'block' : 'none') + '">'
+    +   '<label>尿不湿内容 *（可多选，至少选一项）</label>'
+    +   '<div class="chips" id="diaperContentChips">'
+    +     '<button type="button" class="chip' + (hasPee ? ' sel' : '') + '" data-v="pee">💧 尿</button>'
+    +     '<button type="button" class="chip' + (hasPoop ? ' sel' : '') + '" data-v="poop">💩 便便</button>'
+    +   '</div>'
+    +   '<input type="hidden" name="hasPee" value="' + (hasPee ? '1' : '') + '">'
+    +   '<input type="hidden" name="hasPoop" value="' + (hasPoop ? '1' : '') + '">'
+    + '</div>'
+
+    + '<div class="field" id="fPeeColor" style="display:' + (showDiaper && hasPee ? 'block' : 'none') + '">'
+    +   '<label>尿的颜色</label>'
+    +   '<div class="chips" id="peeColorChips">'
+    +     PEE_COLORS.map(function(p){
+          return '<button type="button" class="chip' + (curPeeColor === p.v ? ' sel' : '') + '" data-v="' + p.v + '">' + p.n + '</button>';
+        }).join('')
+    +   '</div>'
+    +   '<input type="hidden" name="peeColor" value="' + esc(curPeeColor) + '">'
+    + '</div>'
+
+    + '<div class="field" id="fStoolShape" style="display:' + (showDiaper && hasPoop ? 'block' : 'none') + '">'
+    +   '<label>便便形态</label>'
     +   '<div class="chips" id="stoolChips">'
     +     STOOL_SHAPES.map(function(s){
-          var cur = (f && f.stoolShape) || 'normal';
-          return '<button type="button" class="chip' + (cur === s.v ? ' sel' : '') + '" data-v="' + s.v + '">' + s.n + '</button>';
+          return '<button type="button" class="chip' + (curStoolShape === s.v ? ' sel' : '') + '" data-v="' + s.v + '">' + s.n + '</button>';
         }).join('')
-    +   '</div><input type="hidden" name="stoolShape" value="' + esc(f && f.stoolShape ? f.stoolShape : 'normal') + '"></div>'
+    +   '</div>'
+    +   '<input type="hidden" name="stoolShape" value="' + esc(curStoolShape) + '">'
+    + '</div>'
+
     + '<div class="field"><label>记录时间 *</label>'
     +   '<input type="datetime-local" name="recordedAt" required value="' + tsToLocalInput(f && f.recordedAt ? f.recordedAt : Date.now()) + '"></div>'
+
     + '<div class="field"><label>备注</label>'
     +   '<textarea name="notes" placeholder="可选">' + esc(f ? f.notes || '' : '') + '</textarea></div>';
 }
@@ -2535,16 +2783,37 @@ function toggleBreastTimer(){
 function bindFeedForm(mask){
   var typeInput = mask.querySelector('input[name=type]');
   var chips = mask.querySelector('#ftChips');
+  var hasPeeEl = mask.querySelector('input[name=hasPee]');
+  var hasPoopEl = mask.querySelector('input[name=hasPoop]');
+  var fPeeColor = mask.querySelector('#fPeeColor');
+  var fStoolShape = mask.querySelector('#fStoolShape');
+  var diaperChips = mask.querySelector('#diaperContentChips');
+
+  function syncDiaperSubfields(){
+    var hp = hasPeeEl.value === '1';
+    var hpp = hasPoopEl.value === '1';
+    if(fPeeColor) fPeeColor.style.display = (typeInput.value === 'diaper' && hp) ? 'block' : 'none';
+    if(fStoolShape) fStoolShape.style.display = (typeInput.value === 'diaper' && hpp) ? 'block' : 'none';
+    if(diaperChips){
+      diaperChips.querySelectorAll('.chip').forEach(function(c){
+        var v = c.getAttribute('data-v');
+        if(v === 'pee') c.classList.toggle('sel', hp);
+        if(v === 'poop') c.classList.toggle('sel', hpp);
+      });
+    }
+  }
+
   function syncFields(){
     var t = typeInput.value;
-    mask.querySelector('#fAmt').style.display   = ['milk','water'].indexOf(t) >= 0 ? 'block' : 'none';
+    mask.querySelector('#fAmt').style.display    = ['milk','water'].indexOf(t) >= 0 ? 'block' : 'none';
     mask.querySelector('#fBreast').style.display = t === 'breast' ? 'block' : 'none';
-    mask.querySelector('#fFood').style.display  = ['solid','snack'].indexOf(t) >= 0 ? 'block' : 'none';
-    mask.querySelector('#fSup').style.display   = t === 'supplement' ? 'block' : 'none';
-    mask.querySelector('#fSleep').style.display = t === 'sleep' ? 'block' : 'none';
-    mask.querySelector('#fCnt').style.display   = t === 'diaper' ? 'block' : 'none';
-    mask.querySelector('#fStool').style.display = t === 'stool' ? 'block' : 'none';
+    mask.querySelector('#fFood').style.display   = ['solid','snack'].indexOf(t) >= 0 ? 'block' : 'none';
+    mask.querySelector('#fSup').style.display    = t === 'supplement' ? 'block' : 'none';
+    mask.querySelector('#fSleep').style.display  = t === 'sleep' ? 'block' : 'none';
+    mask.querySelector('#fDiaper').style.display = t === 'diaper' ? 'block' : 'none';
+    syncDiaperSubfields();
   }
+
   chips.querySelectorAll('.chip').forEach(function(c){
     c.onclick = function(){
       chips.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('sel'); });
@@ -2553,6 +2822,40 @@ function bindFeedForm(mask){
       syncFields();
     };
   });
+
+  if(diaperChips){
+    diaperChips.querySelectorAll('.chip').forEach(function(c){
+      c.onclick = function(){
+        var v = c.getAttribute('data-v');
+        if(v === 'pee') hasPeeEl.value = hasPeeEl.value === '1' ? '' : '1';
+        else if(v === 'poop') hasPoopEl.value = hasPoopEl.value === '1' ? '' : '1';
+        syncDiaperSubfields();
+      };
+    });
+  }
+
+  var peeColorChips = mask.querySelector('#peeColorChips');
+  if(peeColorChips){
+    peeColorChips.querySelectorAll('.chip').forEach(function(c){
+      c.onclick = function(){
+        peeColorChips.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('sel'); });
+        c.classList.add('sel');
+        mask.querySelector('input[name=peeColor]').value = c.getAttribute('data-v');
+      };
+    });
+  }
+
+  var stoolChips = mask.querySelector('#stoolChips');
+  if(stoolChips){
+    stoolChips.querySelectorAll('.chip').forEach(function(c){
+      c.onclick = function(){
+        stoolChips.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('sel'); });
+        c.classList.add('sel');
+        mask.querySelector('input[name=stoolShape]').value = c.getAttribute('data-v');
+      };
+    });
+  }
+
   var startEl = mask.querySelector('#sleepStart');
   var endEl = mask.querySelector('#sleepEnd');
   var durEl = mask.querySelector('#sleepDuration');
@@ -2573,16 +2876,7 @@ function bindFeedForm(mask){
   if(endEl) endEl.onchange = calcSleep;
   if(startEl && endEl && startEl.value && endEl.value) calcSleep();
 
-  var stoolChips = mask.querySelector('#stoolChips');
-  if(stoolChips){
-    stoolChips.querySelectorAll('.chip').forEach(function(c){
-      c.onclick = function(){
-        stoolChips.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('sel'); });
-        c.classList.add('sel');
-        mask.querySelector('input[name=stoolShape]').value = c.getAttribute('data-v');
-      };
-    });
-  }
+  syncDiaperSubfields();
 }
 
 function editFeeding(id){
@@ -2597,11 +2891,16 @@ function editFeeding(id){
         if(['milk','water'].indexOf(t) >= 0 && !data.amountMl){ toast('请填写用量'); return false; }
         if(['solid','snack'].indexOf(t) >= 0 && !(data.foodName || '').trim()){ toast('请填写食物名称'); return false; }
         if(t === 'supplement' && !(data.supplementName || '').trim()){ toast('请填写补剂名称'); return false; }
+        if(t === 'diaper'){
+          if(!data.hasPee && !data.hasPoop){ toast('请至少选择「尿」或「便便」'); return false; }
+        }
+
         var minutes = null;
         if(t === 'breast'){ if(data.breastMinutes) minutes = +data.breastMinutes; }
         else if(t === 'sleep'){ if(data.sleepMinutes) minutes = +data.sleepMinutes; }
         if(t === 'sleep' && !minutes){ toast('请填写睡眠时间'); return false; }
         if(t === 'breast' && !minutes){ toast('请填写母乳喂养时长'); return false; }
+
         var rec = {
           id: f ? f.id : uid(), babyId: state.babyId, type: t,
           amountMl: data.amountMl ? +data.amountMl : null,
@@ -2610,8 +2909,11 @@ function editFeeding(id){
           minutes: minutes,
           sleepStart: t === 'sleep' ? (data.sleepStart || '') : '',
           sleepEnd: t === 'sleep' ? (data.sleepEnd || '') : '',
-          count: data.count ? +data.count : 1,
-          stoolShape: data.stoolShape || '',
+          count: 1,
+          hasPee: t === 'diaper' ? (data.hasPee === '1') : false,
+          peeColor: t === 'diaper' ? (data.peeColor || 'yellow') : '',
+          hasPoop: t === 'diaper' ? (data.hasPoop === '1') : false,
+          stoolShape: t === 'diaper' ? (data.stoolShape || 'normal') : '',
           notes: (data.notes || '').trim(),
           recordedAt: data.recordedAt ? new Date(data.recordedAt).getTime() : Date.now(),
           createdAt: f ? f.createdAt : Date.now()
@@ -2629,7 +2931,7 @@ function editFeeding(id){
 }
 
 /* ===================================================================
-   身高体重
+   身高体重（WHO 曲线）
    =================================================================== */
 var WHO_WEIGHT = {
   male: [
@@ -3597,7 +3899,7 @@ function editDiary(id){
 }
 
 /* ===================================================================
-   通用：删除 / chips / 导入导出
+   通用
    =================================================================== */
 function delRecord(store, id){
   var nameMap = {
@@ -3627,6 +3929,8 @@ function bindChipsInModal(mask){
     });
   });
 }
+
+/* 导出导入 */
 function exportData(){
   var data = {};
   var chain = Promise.resolve();
@@ -3770,7 +4074,6 @@ function init(){
         try{ if(history && history.replaceState) history.replaceState(null, '', '#profile'); }catch(e){}
       }
       render();
-      /* 启动后延迟自动同步 */
       if(syncState.enabled && syncState.autoSync){
         setTimeout(function(){ syncNow(true); }, 1500);
       }
