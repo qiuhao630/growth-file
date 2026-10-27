@@ -429,7 +429,6 @@ a{color:inherit;text-decoration:none;}
 .chart-type-btn.sel{background:linear-gradient(135deg,#D9AE7B,#C08F5C);color:#fff;border-color:transparent;}
 .feed-stat-card{background:var(--card);border-radius:var(--r);padding:14px;box-shadow:var(--shadow);margin-bottom:12px;border:1px solid rgba(234,223,200,.7);}
 
-/* 横向滚动图（修复版） */
 .feed-chart-scroll{
   overflow-x: auto;
   overflow-y: hidden;
@@ -451,7 +450,6 @@ a{color:inherit;text-decoration:none;}
   height: 260px;
 }
 
-/* 折叠头部 */
 .day-head{
   display:flex;align-items:center;gap:8px;margin:0 2px 8px;
   flex-wrap:wrap;cursor:pointer;user-select:none;
@@ -540,8 +538,8 @@ a{color:inherit;text-decoration:none;}
 
 <script>
 /* =====================================================================
-   成长记录档案 —— v6
-   修复：颜色区分、补剂/点心/辅食统计、横向滚动
+   成长记录档案 —— v7
+   修复：导入后无显示（清理删除标记、自动切换宝宝、显示导入条数）
    ===================================================================== */
 
 if(!String.prototype.padStart){
@@ -2231,7 +2229,6 @@ var PEE_COLORS = [
   { v:'red',    n:'偏红' }
 ];
 
-/* 已添加：辅食、点心、补剂 */
 var CHART_TYPES = [
   { v:'milk',       n:'🍼 奶量',   unit:'ml',   mode:'sum' },
   { v:'breast',     n:'🤱 母乳',   unit:'分钟', mode:'sum' },
@@ -2405,9 +2402,6 @@ function viewFeeding(){
   });
 }
 
-/* ===================================================================
-   喂养记录 —— 图表（横向滚动 + 分段堆叠 + 顶部总数）
-   =================================================================== */
 function drawFeedChart(){
   var scrollWrap = $('#feedChartScroll');
   var canvas = $('#feedChartCanvas');
@@ -2533,7 +2527,6 @@ function drawFeedChart(){
     function X(i){ return padL + (i + 0.5) * (cw / n); }
     function Y(v){ return padT + ch - (v / maxVal) * ch; }
 
-    /* 网格 */
     ctx.strokeStyle = isNight ? '#3D362C' : '#F0E4CE';
     ctx.lineWidth = 1;
     ctx.fillStyle = isNight ? '#8B7A66' : '#A89179';
@@ -2547,7 +2540,6 @@ function drawFeedChart(){
       ctx.fillText(Math.round(gv), padL - 6, gy);
     }
 
-    /* 分段颜色（暖色调色板，区分度高） */
     var PALETTE_DAY = [
       '#F7D9B4', '#EFB980', '#E39A55', '#CE7F35', '#B66A1F', '#95500F',
       '#F2C790', '#DFA65E', '#CB8B35', '#B07024'
@@ -2589,7 +2581,6 @@ function drawFeedChart(){
         }else{
           ctx.fillRect(x, yTop, barW, h);
         }
-        /* 段间分隔线 */
         if(k < segCount - 1){
           ctx.strokeStyle = isNight ? 'rgba(30,27,23,.7)' : 'rgba(255,252,245,.95)';
           ctx.lineWidth = 1.5;
@@ -2640,9 +2631,6 @@ function drawFeedChart(){
   });
 }
 
-/* ===================================================================
-   喂养记录 —— 表单
-   =================================================================== */
 function feedFormBody(f){
   var type = f ? f.type : state.feedingType;
   if(type === 'stool') type = 'diaper';
@@ -3930,7 +3918,9 @@ function bindChipsInModal(mask){
   });
 }
 
-/* 导出导入 */
+/* ===================================================================
+   导出 / 导入（导入修复版）
+   =================================================================== */
 function exportData(){
   var data = {};
   var chain = Promise.resolve();
@@ -3950,6 +3940,7 @@ function exportData(){
     toast('备份文件已导出（不含照片视频）✅');
   }).catch(function(e){ toast('导出失败：' + e.message); });
 }
+
 function importData(){
   var input = document.createElement('input');
   input.type = 'file'; input.accept = 'application/json,.json';
@@ -3957,29 +3948,83 @@ function importData(){
     var f = input.files[0];
     if(!f) return;
     f.text().then(function(text){
-      var data = JSON.parse(text);
-      if(!confirm('导入将合并到现有数据中（相同 ID 会覆盖）。确定继续吗？')) return;
+      var data;
+      try{ data = JSON.parse(text); }
+      catch(e){ alert('导入失败：文件不是有效的 JSON 格式。'); return; }
+
+      var total = 0;
+      var summary = [];
+      STORES.forEach(function(s){
+        if(s === 'albumFiles') return;
+        if(data[s] && data[s].length){
+          total += data[s].length;
+          summary.push(s + ':' + data[s].length);
+        }
+      });
+
+      if(total === 0){
+        alert('备份文件中没有任何记录，请确认文件是否正确导出。');
+        return;
+      }
+
+      if(!confirm('即将导入 ' + total + ' 条记录（' + summary.join(', ') + '）。\n相同 ID 会覆盖。确定继续吗？')) return;
+
       var chain = Promise.resolve();
       STORES.forEach(function(s){
         if(s === 'albumFiles' || !data[s] || !data[s].length) return;
         chain = chain.then(function(){
           var sub = Promise.resolve();
-          data[s].forEach(function(rec){ sub = sub.then(function(){ return dbPut(s, rec); }); });
+          data[s].forEach(function(rec){
+            sub = sub.then(function(){
+              var clean = JSON.parse(JSON.stringify(rec));
+              delete clean._deleted;
+              clean._updatedAt = Date.now();
+              return dbPut(s, clean);
+            });
+          });
           return sub;
         });
       });
+
       return chain.then(function(){
-        toast('数据导入完成 ✅');
-        return dbAll('babies').then(function(babies){
-          if(babies.length){ state.baby = babies[0]; state.babyId = babies[0].id; }
+        return dbAll('babies', true);
+      }).then(function(babies){
+        var realBabies = (babies || []).filter(function(b){ return !b._deleted; });
+
+        if(realBabies.length === 0){
           render();
-          if(syncState.enabled && syncState.autoSync) syncNow(true);
-        });
+          alert('导入完成，但备份中没有宝宝档案。\n\n可能原因：\n1. 导出时还没创建宝宝档案\n2. 备份文件不完整\n\n请到「宝宝档案」重新创建，或使用其他备份文件。');
+          return;
+        }
+
+        var picked = realBabies[0];
+        state.baby = picked;
+        state.babyId = picked.id;
+        state.homeDate = todayStr();
+        state.route = 'home';
+        try{ if(history && history.replaceState) history.replaceState(null, '', '#home'); }catch(e){}
+
+        render();
+
+        var msg = '导入成功 ✅\n\n宝宝：' + picked.name
+          + '\n共导入 ' + total + ' 条记录';
+        if(realBabies.length > 1){
+          msg += '\n\n⚠️ 检测到 ' + realBabies.length + ' 个宝宝，已切换到「' + picked.name + '」。';
+        }
+        alert(msg);
+
+        if(syncState.enabled && syncState.autoSync){
+          setTimeout(function(){ syncNow(true); }, 800);
+        }
       });
-    }).catch(function(e){ alert('导入失败：文件格式不正确或已损坏。\n' + e.message); });
+
+    }).catch(function(e){
+      alert('导入失败：' + (e && e.message ? e.message : e));
+    });
   };
   input.click();
 }
+
 function clearAllData(){
   confirmDialog('这将清空本机保存的全部记录（含相册媒体文件），且无法恢复。确定继续吗？', function(){
     var chain = Promise.resolve();
