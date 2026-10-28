@@ -545,11 +545,12 @@ a{color:inherit;text-decoration:none;}
 
 <script>
 /* =====================================================================
-   成长记录档案 —— v9
-   导入时只导入 ID 为 mujjb5p4r84ytw 的宝宝及其所有记录
+   成长记录档案 —— v10
+   新增：首次启动自动清理测试宝宝，只保留记录数最多的那个
    ===================================================================== */
 
 var TARGET_IMPORT_BABY_ID = 'mujjb5p4r84ytw';
+var CLEANUP_FLAG_KEY = 'bb_cleanup_v10_done';
 
 if(!String.prototype.padStart){
   String.prototype.padStart = function(len, ch){
@@ -1620,6 +1621,138 @@ function confirmDialog(msg, onOk){
 }
 
 /* ===================================================================
+   自动清理：只保留记录数最多的宝宝
+   =================================================================== */
+function autoCleanupBabies(){
+  return dbAll('babies', true).then(function(allBabies){
+    var realBabies = (allBabies || []).filter(function(b){ return !b._deleted; });
+    if(realBabies.length <= 1){
+      return { keep: realBabies[0] || null, keepCount: 0, removed: 0 };
+    }
+
+    var countMap = {};
+    realBabies.forEach(function(b){ countMap[b.id] = 0; });
+
+    var storesToCount = ['feeding','growth','album','vaccine','medical','inventory','montessori','motor','diary'];
+    var countChain = Promise.resolve();
+    storesToCount.forEach(function(s){
+      countChain = countChain.then(function(){
+        return dbAll(s, true).then(function(rows){
+          (rows || []).forEach(function(r){
+            if(r && !r._deleted && r.babyId && countMap.hasOwnProperty(r.babyId)){
+              countMap[r.babyId]++;
+            }
+          });
+        });
+      });
+    });
+
+    return countChain.then(function(){
+      var keepBaby = realBabies[0];
+      var maxCount = countMap[keepBaby.id] || 0;
+      realBabies.forEach(function(b){
+        var c = countMap[b.id] || 0;
+        if(c > maxCount){
+          maxCount = c;
+          keepBaby = b;
+        }
+      });
+
+      var toDelete = realBabies.filter(function(b){ return b.id !== keepBaby.id; });
+      var delChain = Promise.resolve();
+
+      toDelete.forEach(function(baby){
+        storesToCount.forEach(function(s){
+          delChain = delChain.then(function(){
+            return dbByBaby(s, baby.id, true).then(function(rows){
+              var sub = Promise.resolve();
+              (rows || []).forEach(function(r){
+                sub = sub.then(function(){
+                  if(s === 'album'){
+                    return dbDel('albumFiles', r.id).catch(function(){});
+                  }
+                }).then(function(){
+                  return dbDel(s, r.id);
+                });
+              });
+              return sub;
+            });
+          });
+        });
+        delChain = delChain.then(function(){
+          return dbDel('babies', baby.id);
+        });
+      });
+
+      return delChain.then(function(){
+        return { keep: keepBaby, keepCount: maxCount, removed: toDelete.length };
+      });
+    });
+  });
+}
+
+/* ===================================================================
+   手动删除单个宝宝
+   =================================================================== */
+function deleteBaby(id){
+  return dbGet('babies', id).then(function(baby){
+    if(!baby){ toast('宝宝不存在'); return; }
+    confirmDialog(
+      '确定删除宝宝「' + baby.name + '」吗？\n\n'
+      + '该宝宝的所有关联记录都会被一并删除：\n'
+      + '喂养、身高体重、疫苗、医疗、库存、相册、日记等，\n'
+      + '且无法恢复。\n\n'
+      + '建议先「导出备份」再操作。',
+      function(){
+        var relatedStores = ['feeding','growth','album','vaccine','medical','inventory','montessori','motor','diary'];
+        var chain = Promise.resolve();
+        relatedStores.forEach(function(s){
+          chain = chain.then(function(){
+            return dbByBaby(s, id, true).then(function(rows){
+              var sub = Promise.resolve();
+              rows.forEach(function(r){
+                sub = sub.then(function(){
+                  if(s === 'album'){
+                    return dbDel('albumFiles', r.id).catch(function(){});
+                  }
+                }).then(function(){
+                  return dbDel(s, r.id);
+                });
+              });
+              return sub;
+            });
+          });
+        });
+
+        return chain.then(function(){
+          return dbDel('babies', id);
+        }).then(function(){
+          toast('已删除宝宝「' + baby.name + '」');
+          return dbAll('babies', true).then(function(babies){
+            var realBabies = (babies || []).filter(function(b){ return !b._deleted; });
+
+            if(realBabies.length === 0){
+              state.baby = null;
+              state.babyId = null;
+              state.route = 'profile';
+              try{ if(history && history.replaceState) history.replaceState(null, '', '#profile'); }catch(e){}
+            }else if(id === state.babyId){
+              state.baby = realBabies[0];
+              state.babyId = realBabies[0].id;
+              state.homeDate = todayStr();
+            }
+
+            render();
+
+            if(syncState.enabled && syncState.autoSync) syncNow(true);
+          });
+        });
+      }
+    );
+  });
+}
+
+/* ===================================================================
    首页
    =================================================================== */
 function viewHome(){
@@ -1863,12 +1996,13 @@ function viewProfile(){
 function renderBabySwitcher(realBabies){
   var html = '<div class="card">';
   html += '<div class="card-title">👶 我的宝宝（共 ' + realBabies.length + ' 个）</div>';
-  html += '<div class="hint" style="margin-bottom:10px">点击切换正在查看的宝宝</div>';
+  html += '<div class="hint" style="margin-bottom:10px">点击切换正在查看的宝宝；点 🗑 可删除</div>';
   realBabies.forEach(function(baby){
     var isActive = (baby.id === state.babyId);
-    html += '<div class="baby-switch-item" onclick="switchBaby(\'' + baby.id + '\')" style="background:' 
+    html += '<div class="baby-switch-item" style="background:' 
       + (isActive ? 'linear-gradient(120deg,#FFF6E3,#F7E6C8)' : 'var(--bg)') 
       + ';border:1.5px solid ' + (isActive ? 'var(--primary)' : 'var(--border)') + '">';
+    html += '<div onclick="switchBaby(\'' + baby.id + '\')" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer">';
     html += '<div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(140deg,#FBE4BE,#EBC89B);display:flex;align-items:center;justify-content:center;font-size:18px;overflow:hidden;flex:0 0 36px">' 
       + (baby.avatar ? '<img src="' + baby.avatar + '" style="width:100%;height:100%;object-fit:cover">' : '👶') + '</div>';
     html += '<div style="flex:1;min-width:0">';
@@ -1880,6 +2014,10 @@ function renderBabySwitcher(realBabies){
     html += '</div>';
     if(!isActive){
       html += '<span style="font-size:12px;color:var(--primary-d);font-weight:600;white-space:nowrap">切换 ›</span>';
+    }
+    html += '</div>';
+    if(realBabies.length > 1){
+      html += '<button class="icon-btn del" style="margin-left:6px" onclick="deleteBaby(\'' + baby.id + '\')">🗑</button>';
     }
     html += '</div>';
   });
@@ -3972,7 +4110,7 @@ function bindChipsInModal(mask){
 }
 
 /* ===================================================================
-   导出
+   导出 / 导入
    =================================================================== */
 function exportData(){
   var data = {};
@@ -3994,9 +4132,6 @@ function exportData(){
   }).catch(function(e){ toast('导出失败：' + e.message); });
 }
 
-/* ===================================================================
-   导入 —— 只导入 ID 为 TARGET_IMPORT_BABY_ID 的宝宝及其记录
-   =================================================================== */
 function importData(){
   var input = document.createElement('input');
   input.type = 'file'; input.accept = 'application/json,.json';
@@ -4008,7 +4143,6 @@ function importData(){
       try{ data = JSON.parse(text); }
       catch(e){ alert('导入失败：文件不是有效的 JSON 格式。'); return; }
 
-      /* 在备份中查找目标宝宝 */
       var targetBaby = null;
       if(Array.isArray(data.babies)){
         for(var i = 0; i < data.babies.length; i++){
@@ -4027,7 +4161,6 @@ function importData(){
         return;
       }
 
-      /* 统计备份中目标宝宝的关联记录 */
       var counts = {};
       var total = 0;
       STORES.forEach(function(s){
@@ -4056,20 +4189,17 @@ function importData(){
 
       if(!confirm(msg)) return;
 
-      /* 1. 清空所有 store */
       var clearChain = Promise.resolve();
       STORES.forEach(function(s){
         clearChain = clearChain.then(function(){ return dbClear(s); });
       });
 
       clearChain.then(function(){
-        /* 2. 导入宝宝档案 */
         var cleanBaby = JSON.parse(JSON.stringify(targetBaby));
         delete cleanBaby._deleted;
         cleanBaby._updatedAt = Date.now();
         return dbPut('babies', cleanBaby);
       }).then(function(){
-        /* 3. 逐个 store 顺序导入 */
         var importChain = Promise.resolve();
         STORES.forEach(function(s){
           if(s === 'albumFiles' || s === 'babies') return;
@@ -4090,13 +4220,11 @@ function importData(){
         });
         return importChain;
       }).then(function(){
-        /* 4. 验证导入结果 */
         return dbGet('babies', TARGET_IMPORT_BABY_ID);
       }).then(function(savedBaby){
         if(!savedBaby){
           throw new Error('宝宝档案未成功写入数据库，请重试。');
         }
-        /* 5. 统计实际写入的记录数 */
         return Promise.all([
           dbByBaby('feeding', TARGET_IMPORT_BABY_ID),
           dbByBaby('growth', TARGET_IMPORT_BABY_ID),
@@ -4106,7 +4234,6 @@ function importData(){
           var growthCount = res[1].length;
           var vaccineCount = res[2].length;
 
-          /* 6. 强制选中该宝宝 */
           state.baby = savedBaby;
           state.babyId = TARGET_IMPORT_BABY_ID;
           state.homeDate = todayStr();
@@ -4224,11 +4351,49 @@ function init(){
         document.body.appendChild(warn);
       }catch(e){}
     }
+
+    /* ==== 检查是否已经执行过清理 ==== */
+    var cleanupDone = false;
+    try{ cleanupDone = !!localStorage.getItem(CLEANUP_FLAG_KEY); }catch(e){}
+
     return dbAll('babies').then(function(babies){
+      if(!cleanupDone && babies && babies.length > 1){
+        /* 首次启动 + 检测到多宝宝 → 自动清理 */
+        return autoCleanupBabies().then(function(result){
+          try{ localStorage.setItem(CLEANUP_FLAG_KEY, '1'); }catch(e){}
+
+          if(result.keep){
+            state.baby = result.keep;
+            state.babyId = result.keep.id;
+          }
+          state.dbReady = true;
+          render();
+
+          if(result.removed > 0){
+            setTimeout(function(){
+              alert(
+                '🧹 已自动清理 ' + result.removed + ' 个测试宝宝档案\n\n'
+                + '保留：「' + result.keep.name + '」\n'
+                + '（共 ' + result.keepCount + ' 条记录）\n\n'
+                + '如需恢复其他宝宝，请重新导入对应备份文件。'
+              );
+            }, 300);
+          }
+
+          if(syncState.enabled && syncState.autoSync){
+            setTimeout(function(){ syncNow(true); }, 1500);
+          }
+        });
+      }
+
+      /* 正常启动流程 */
       if(babies && babies.length){
-        state.baby = babies[0]; state.babyId = babies[0].id;
+        state.baby = babies[0];
+        state.babyId = babies[0].id;
       }
       state.dbReady = true;
+      try{ localStorage.setItem(CLEANUP_FLAG_KEY, '1'); }catch(e){}
+
       if(!state.baby && state.route !== 'profile'){
         state.route = 'profile';
         try{ if(history && history.replaceState) history.replaceState(null, '', '#profile'); }catch(e){}
